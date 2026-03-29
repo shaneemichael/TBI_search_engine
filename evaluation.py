@@ -1,14 +1,12 @@
 import re
 import math
-from bsbi import BSBIIndex
-from compression import VBEPostings
+import os
+import time
 
-######## >>>>> IR Metrics
-
+from indexers import BSBIIndex, SPIMIIndex
+from compression import VBEPostings, EliasGammaPostings
+from search_bonus import AdaptiveRetriever
 from metrics import rbp, dcg, ndcg, ap
-
-
-######## >>>>> Load qrels
 
 def load_qrels(qrel_file="qrels.txt", max_q_id=30, max_doc_id=1033):
     """
@@ -25,39 +23,62 @@ def load_qrels(qrel_file="qrels.txt", max_q_id=30, max_doc_id=1033):
             qrels[qid][did] = 1
     return qrels
 
-
-######## >>>>> Evaluation
-
 def eval(qrels, query_file="queries.txt", k=1000):
     """
     Evaluate the search engine with all metrics (RBP, DCG, NDCG, AP)
-    against 30 queries, for TF-IDF and BM25 methods.
+    against 30 queries, evaluating ALL possible major architecture combinations:
+    1. Base Configs
+    2. Advanced Lexical Configs
+    3. Dense Semantic FAISS Configs
     """
-    BSBI_instance = BSBIIndex(data_dir='collection',
-                              postings_encoding=VBEPostings,
-                              output_dir='index')
-
     with open(query_file) as file:
         queries = [line.strip().split() for line in file]
 
+    methods = []
+
+    # 1. Base Configuration (Mandatory Assignment)
+    print("\nLoading Base Index (BSBI + VBEPostings)...")
+    bsbi_instance = BSBIIndex(data_dir='collection', postings_encoding=VBEPostings, output_dir='index')
+    bsbi_instance.load()
+    methods.append(("TF-IDF (Base BSBI)", bsbi_instance.retrieve_tfidf))
+    methods.append(("BM25 (Base BSBI)", bsbi_instance.retrieve_bm25))
+    methods.append(("BM25-WAND (Base BSBI)", bsbi_instance.retrieve_bm25_wand))
+
+    # 2. Advanced Lexical Configuration (SPIMI + Trie + EliasGamma)
+    if os.path.exists('index_bonus/spimi_main.index'):
+        print("Loading Advanced Lexical Index (SPIMI + Trie + EliasGamma)...")
+        spimi_index = SPIMIIndex(data_dir='collection', postings_encoding=EliasGammaPostings, output_dir='index_bonus', index_name='spimi_main')
+        spimi_index.load()
+        methods.append(("Lexical WAND (SPIMI Bonus)", lambda q, k: spimi_index.retrieve_bm25_wand(q, k=k)))
+    
+    # 3. Dense Semantic FAISS Configuration (Adaptive LSI)
+    if os.path.exists('index_bonus/lsi.faiss'):
+        print("Loading Dense Semantic FAISS (Adaptive Retriever)...")
+        try:
+            adaptive_retriever = AdaptiveRetriever(data_dir='collection', output_dir='index_bonus', index_name='spimi_patricia_index')
+            methods.append(("Adaptive Hybrid (FAISS + Patricia)", lambda q, top_k: adaptive_retriever.retrieve_adaptive(q, top_k=top_k)))
+        except Exception as e:
+            print("Could not load FAISS module for combination testing:", e)
+
+    print("\n" + "="*100)
+    print(f"🚀 {'EXHAUSTIVE COMBINED EVALUATION STARTED':^96} 🚀")
+    print("="*100)
+    print(f"{'Retrieval Architecture':<38} | {'Time (s)':<10} | {'Mean RBP':<10} | {'Mean DCG':<10} | {'Mean NDCG':<10} | {'Mean AP':<10}")
+    print("-" * 100)
+
     def _get_ranking(retrieve_fn, query, qid):
         ranking = []
-        for (score, doc) in retrieve_fn(query, k=k):
-            # Extract numeric doc id from paths like ./collection/7/625.txt
+        for (score, doc) in retrieve_fn(query, k):
             m = re.search(r'[\\/](\d+)\.txt$', doc)
             if m:
                 did = int(m.group(1))
                 ranking.append(qrels[qid].get(did, 0))
         return ranking
 
-    methods = [
-        ("TF-IDF",    BSBI_instance.retrieve_tfidf),
-        ("BM25",      BSBI_instance.retrieve_bm25),
-        ("BM25-WAND", BSBI_instance.retrieve_bm25_wand),
-    ]
-
     for method_name, retrieve_fn in methods:
         rbp_scores, dcg_scores, ndcg_scores, ap_scores = [], [], [], []
+        
+        start_time = time.time()
         for parts in queries:
             qid = parts[0]
             query = " ".join(parts[1:])
@@ -66,28 +87,23 @@ def eval(qrels, query_file="queries.txt", k=1000):
             dcg_scores.append(dcg(ranking))
             ndcg_scores.append(ndcg(ranking))
             ap_scores.append(ap(ranking))
-
-        n = len(queries)
-        print(f"\nHasil evaluasi [{method_name}] terhadap {n} queries")
-        print(f"  Mean RBP  = {sum(rbp_scores)  / n:.4f}")
-        print(f"  Mean DCG  = {sum(dcg_scores)  / n:.4f}")
-        print(f"  Mean NDCG = {sum(ndcg_scores) / n:.4f}")
-        print(f"  Mean AP   = {sum(ap_scores)   / n:.4f}")
-
+        end_time = time.time()
+        
+        num_q = len(queries)
+        speed = end_time - start_time
+        m_rbp = sum(rbp_scores) / num_q
+        m_dcg = sum(dcg_scores) / num_q
+        m_ndcg = sum(ndcg_scores) / num_q
+        m_ap = sum(ap_scores) / num_q
+        
+        print(f"{method_name:<38} | {speed:<10.3f} | {m_rbp:<10.4f} | {m_dcg:<10.4f} | {m_ndcg:<10.4f} | {m_ap:<10.4f}")
+    
+    print("="*100 + "\n")
 
 if __name__ == '__main__':
     qrels = load_qrels()
 
     assert qrels["Q1"][166] == 1, "qrels is incorrect"
     assert qrels["Q1"][300] == 0, "qrels is incorrect"
-
-    # Verify metric implementations with simple examples
-    sample = [1, 0, 1, 1, 0]
-    print("Sample ranking:", sample)
-    print(f"  RBP  = {rbp(sample):.4f}")
-    print(f"  DCG  = {dcg(sample):.4f}")
-    print(f"  NDCG = {ndcg(sample):.4f}")
-    print(f"  AP   = {ap(sample):.4f}")
-    print()
 
     eval(qrels)
