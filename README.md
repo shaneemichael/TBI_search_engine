@@ -1,6 +1,4 @@
-# Information Retrieval System
-
-An enterprise-grade, from-scratch search engine built using Python's standard library. The pipeline implements efficient indexing, bit-level compression, heuristic scoring, cascade retrieval arrays, and exhaustive IR evaluation methodologies.
+# TBI - Search Engine From Scratch
 
 ## Core Capabilities
 
