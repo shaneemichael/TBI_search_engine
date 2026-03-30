@@ -5,7 +5,7 @@ import time
 
 from indexers import BSBIIndex, SPIMIIndex
 from compression import VBEPostings, EliasGammaPostings
-from search_bonus import AdaptiveRetriever
+from search import AdaptiveRetriever
 from metrics import rbp, dcg, ndcg, ap
 
 def load_qrels(qrel_file="qrels.txt", max_q_id=30, max_doc_id=1033):
@@ -39,7 +39,15 @@ def eval(qrels, query_file="queries.txt", k=1000):
     # 1. Base Configuration (Mandatory Assignment)
     print("\nLoading Base Index (BSBI + VBEPostings)...")
     bsbi_instance = BSBIIndex(data_dir='collection', postings_encoding=VBEPostings, output_dir='index')
-    bsbi_instance.load()
+    try:
+        bsbi_instance.load()
+        if len(bsbi_instance.term_id_map) > 0:
+            _ = bsbi_instance.retrieve_tfidf("virus", k=1)
+    except Exception:
+        print("Warning: Base Index is either missing or encoded with a different algorithm on disk (e.g. Elias vs VBE). Rebuilding base index to baseline automatically...")
+        bsbi_instance.index()
+        bsbi_instance.load()
+
     methods.append(("TF-IDF (Base BSBI)", bsbi_instance.retrieve_tfidf))
     methods.append(("BM25 (Base BSBI)", bsbi_instance.retrieve_bm25))
     methods.append(("BM25-WAND (Base BSBI)", bsbi_instance.retrieve_bm25_wand))
@@ -48,15 +56,32 @@ def eval(qrels, query_file="queries.txt", k=1000):
     if os.path.exists('index_bonus/spimi_main.index'):
         print("Loading Advanced Lexical Index (SPIMI + Trie + EliasGamma)...")
         spimi_index = SPIMIIndex(data_dir='collection', postings_encoding=EliasGammaPostings, output_dir='index_bonus', index_name='spimi_main')
-        spimi_index.load()
+        try:
+            spimi_index.load()
+            if len(spimi_index.term_id_map) > 0:
+                _ = spimi_index.retrieve_tfidf("virus", k=1)
+        except Exception:
+            print("Warning: Lexical Bonus Index format mismatch on disk (e.g. Elias vs VBE). Rebuilding spimi_main to baseline automatically...")
+            spimi_index.index()
+            spimi_index.load()
+            
         methods.append(("Lexical WAND (SPIMI Bonus)", lambda q, k: spimi_index.retrieve_bm25_wand(q, k=k)))
-    
-    # 3. Dense Semantic FAISS Configuration (Adaptive LSI)
-    if os.path.exists('index_bonus/lsi.faiss'):
+        
         print("Loading Dense Semantic FAISS (Adaptive Retriever)...")
         try:
-            adaptive_retriever = AdaptiveRetriever(data_dir='collection', output_dir='index_bonus', index_name='spimi_patricia_index')
-            methods.append(("Adaptive Hybrid (FAISS + Patricia)", lambda q, top_k: adaptive_retriever.retrieve_adaptive(q, top_k=top_k)))
+            from indexers import SPIMIPatriciaIndex
+            lexical_index = SPIMIPatriciaIndex(data_dir='collection', postings_encoding=EliasGammaPostings, output_dir='index_bonus', index_name='spimi_patricia_index')
+            try:
+                lexical_index.load()
+                if len(lexical_index.term_id_map) > 0:
+                    _ = lexical_index.retrieve_tfidf("virus", k=1)
+            except Exception:
+                print("Warning: LSI base index format mismatch on disk! Rebuilding SPIMI+Patricia+Elias to baseline automatically...")
+                lexical_index.index()
+                lexical_index.load()
+                
+            adaptive_retriever = AdaptiveRetriever(lexical_index, output_dir='index_bonus')
+            methods.append(("Adaptive Hybrid (FAISS + Patricia)", lambda q, top_k: adaptive_retriever.retrieve_adaptive(q, k=top_k)))
         except Exception as e:
             print("Could not load FAISS module for combination testing:", e)
 

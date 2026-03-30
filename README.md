@@ -23,27 +23,79 @@ The system natively implements the following advanced retrieval structures:
 
 ## Usage Guide
 
-*Requirement: `pip install tqdm`*
+*Requirement: `pip install -r requirements.txt`* or *`pip install tqdm faiss-cpu numpy`*
 
 ### 1. Build the Indices
+You can build the base index using the default script or customize the architecture via the unified CLI. It is **required** to build the indices before running your first search.
+
 ```bash
-python bsbi.py                   # Builds Base BSBI Index
-python build_lsi_faiss.py        # Computes LSI Dense Semantic Vectors
+# Build the default base index (BSBI + VBE + Standard Dictionary)
+python bsbi.py
+
+# Build a custom advanced index (e.g., SPIMI + Patricia Tree + Elias-Gamma)
+# Note: Use --build flag to construct the index before a search can be run if you haven't built it.
+python search.py --build --index spimi --dictionary patricia --compression elias
+
+# For Bonus: Build Semantic Vectors for Adaptive/FAISS Retrieval
+python build_lsi_faiss.py
 ```
 
-### 2. Search Execution
-Execute base model tests, or seamlessly pivot to the advanced semantic framework:
-```bash
-python search.py                 # Evaluates baseline TF-IDF vs BM25 WAND
-python search_bonus.py "tumor" --mode lexical   # Uses SPIMI, Patricia Trie, Elias-Gamma
-python search_bonus.py "tumor" --mode adaptive  # Triggers Hybrid FAISS routing 
-```
+### 2. Search Execution (Unified CLI)
+The search interface is highly parameterized. You can specify the exact architecture you want to test.
 
-### 3. Quantitative Evaluation
-```bash
-python evaluation.py             # Executes metrics suite (RBP, DCG, NDCG, AP)
-```
+**CLI Arguments:**
+- `query`: The query string to search for. If omitted, runs default queries.
+- `--index`: Indexing algorithm (`bsbi` or `spimi`). Default: `bsbi`.
+- `--dictionary`: Dictionary structure (`standard`, `trie`, `patricia`). Default: `standard`.
+- `--compression`: Compression model (`standard`, `vbe`, `elias`). Default: `vbe`.
+- `--metric`: Retrieval metric (`tfidf`, `bm25`, `wand`, `adaptive`, `all`). Default: `all`.
+- `--build`: Build the index before searching (Boolean flag).
+- `--snippets`: Show Google-like context snippets (Boolean flag).
 
+**Examples to evaluate Specific Features:**
+
+* **Evaluate Base System (TF-IDF vs BM25 vs WAND Top-K)**
+  ```bash
+  python search.py
+  ```
+
+* **Evaluate Task 1 (Elias-Gamma Bit-Level Compression)**
+  ```bash
+  # Ensure index is built with elias compression
+  python search.py "cancer" --build --compression elias
+  ```
+
+* **Evaluate Task 2 & 4 (BM25 & WAND Optimization)**
+  ```bash
+  python search.py "tumor treatment" --metric wand --snippets
+  ```
+
+* **Evaluate Bonus Modules (SPIMI, Tries, Adaptive LSI retrieval)**
+  ```bash
+  # Test SPIMI and Patricia Tree Dictionary
+  python search.py "blood pressure" --build --index spimi --dictionary patricia --metric wand --snippets
+
+  # Test FAISS-powered Adaptive LSI Search
+  python search.py "viral infection" --index spimi --dictionary patricia --metric adaptive --snippets
+  ```
+
+### 3. Quantitative Evaluation (Metrics)
+Run the automated evaluation script to grade the engine's performance against the provided `qrels.txt` using **RBP, DCG, NDCG, and AP** metrics (Task 3).
+
+> ⚠️ **Important:** Because `evaluation.py` explicitly loads multiple pre-built architectures into memory simultaneously (Base VBE vs Advanced Elias), you must ensure the disk binaries match its expectations before running it. If you have been playing around with custom `--build` commands, please run the following rebuild sequence to align the bin files first:
+>
+> ```bash
+> # 1. Align Base Index to VBE
+> python search.py --build --index bsbi --compression vbe
+> # 2. Align Lexical Index to Trie + Elias
+> python search.py --build --index spimi --dictionary trie --compression elias
+> # 3. Align Semantic Index to Patricia + Elias
+> python search.py --build --index spimi --dictionary patricia --compression elias
+> ```
+
+```bash
+python evaluation.py
+```
 ---
 
 ## Architectural Benchmarks
@@ -64,7 +116,7 @@ Adaptive Hybrid (FAISS + Patricia)     | 0.534      | 0.7722     | 6.5673     | 
 
 ### 2. Live Retrieval Comparisons
 
-**Lexical Engine Output** (`python search_bonus.py "alkylated with radioactive iodoacetate" --mode lexical`)
+**Lexical Engine Output** (`python search.py "alkylated with radioactive iodoacetate" --index spimi --dictionary trie --compression elias --metric wand --snippets`)
 ```text
 Features: SPIMI Indexing, Trie Dictionary, Elias-Gamma, WAND, Snippets
 Query: alkylated with radioactive iodoacetate
@@ -79,7 +131,7 @@ Query: alkylated with radioactive iodoacetate
      ... distribution and excretion of **radioactivity** after parenteral administration of **radioactive** polydiethylstilbestrol phosphate to rats and a cow. polydiethylstilbestrol phosphate (psp), a water soluble polyester of phos- phoric acid and diethylstilbestrol, ...
 ```
 
-**Dense Semantic Engine Output** (`python search_bonus.py "alkylated with radioactive iodoacetate" --mode adaptive`)
+**Dense Semantic Engine Output** (`python search.py "alkylated with radioactive iodoacetate" --index spimi --dictionary patricia --compression elias --metric adaptive --snippets`) 
 ```text
 Features: SPIMI Patricia Tree, WAND Lexical, LSI FAISS Semantics, Adaptive Routing, Snippets
 Query: alkylated with radioactive iodoacetate
@@ -94,7 +146,7 @@ Query: alkylated with radioactive iodoacetate
      ... did not enter the area, suggesting a thrombus within the aneurysm . in 5, the aneurysm was detectable on the film and was also seen to be filled with **radioactivity** ...
 ```
 
-**Base Engine Console Matrix** (`python search.py`)
+**Base Engine Console Matrix** (`python search.py "alkylated with radioactive iodoacetate"`)
 ```text
 ============================================================
 Query: alkylated with radioactive iodoacetate
